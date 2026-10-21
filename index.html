@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Parking Monitoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Barlow+Condensed:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+<style>
+  :root {
+    --asphalt: #23272B; --asphalt-2: #2E3338; --asphalt-3: #363C42; --paint: #ECEBE4; --ink: #F3F2EC;
+    --muted: #A0A8AF; --free: #34B877; --taken: #EA5A5F; --caution: #F5C518;
+    --sign-free: #0F4030; --sign-full: #4E1A1D; --sign-idle: #2F3A44;
+    --car: #8FA6BD; --accent: #3DA8F5;
+    --font-display: "Barlow Condensed", "Arial Narrow", Impact, sans-serif;
+    --font-body: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--asphalt); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; min-height: 100vh; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 18px 60px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+  h1 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 32px; }
+  h2 { font-family: var(--font-display); font-weight: 600; font-size: 22px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1.5px solid var(--muted); border-radius: 999px; font-size: 14px; font-weight: 500; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .pill.live, .dot.live { border-color: var(--free); } .pill.live .dot, .dot.live { background: var(--free); }
+  .pill.warn, .dot.warn { border-color: var(--caution); } .pill.warn .dot, .dot.warn { background: var(--caution); }
+  .pill.off, .dot.off { border-color: var(--taken); } .pill.off .dot, .dot.off { background: var(--taken); }
+
+  section.panel { background: var(--asphalt-2); border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+
+  /* ---- Papan ketersediaan ---- */
+  .sign { display: flex; align-items: center; gap: 20px; padding: 18px 22px; background: var(--sign-idle); border: 4px solid var(--paint); border-radius: 14px; margin-bottom: 20px; transition: background-color .4s ease; }
+  .sign[data-mode="free"] { background: var(--sign-free); } .sign[data-mode="full"] { background: var(--sign-full); }
+  .count { font-family: var(--font-display); font-weight: 700; font-size: 84px; line-height: .9; min-width: 1.1ch; text-align: center; }
+  .sign-main { font-family: var(--font-display); font-weight: 600; font-size: 26px; }
+  .sign-sub { color: #CFD6DB; font-size: 15px; }
+
+  /* ---- Gate cards ---- */
+  .gates { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  .gate-card { background: var(--asphalt-3); border-radius: 14px; padding: 18px; text-align: center; }
+  .barrier { width: 110px; height: 9px; background: var(--taken); border-radius: 5px; margin: 20px auto 10px; transform-origin: left center; transition: transform .6s ease, background-color .4s ease; }
+  .gate-card[data-open="true"] .barrier { background: var(--free); transform: rotate(-55deg); }
+  .gate-name { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+  .gate-status { margin-top: 2px; color: var(--muted); font-size: 14px; font-weight: 500; }
+  .gate-card[data-open="true"] .gate-status { color: var(--free); }
+  .gate-source { margin-top: 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  /* ---- Slot ---- */
+  .lot { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 4px; }
+  .floor { position: relative; overflow: hidden; aspect-ratio: 3 / 3.6; background: var(--asphalt-3); border: 6px solid var(--paint); border-bottom: 0; border-radius: 3px 3px 0 0; }
+  .bay-letter { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; font-size: 68px; color: var(--paint); opacity: .28; }
+  .car { position: absolute; left: 50%; bottom: 8%; width: 60%; transform: translate(-50%, 130%); transition: transform .8s cubic-bezier(.22,.8,.3,1); }
+  .bay[data-state="taken"] .car { transform: translate(-50%, 0); }
+  .car svg { display: block; width: 100%; height: auto; }
+  .bay-info { padding-top: 8px; text-align: center; }
+  .bay h3 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 19px; }
+  .status { display: inline-flex; align-items: center; gap: 7px; margin-top: 3px; font-weight: 500; font-size: 14px; justify-content: center; }
+
+  /* ---- Kamera / Teachable Machine ---- */
+  .cam-wrap { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  #webcam-container { width: 260px; height: 260px; border-radius: 12px; overflow: hidden; background: var(--asphalt-3); flex: none; display: flex; align-items: center; justify-content: center; }
+  #webcam-container canvas { display: block; }
+  .cam-info { flex: 1; min-width: 220px; }
+  .predict-bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 14px; }
+  .predict-label { width: 90px; flex: none; }
+  .predict-track { flex: 1; height: 10px; background: var(--asphalt-3); border-radius: 5px; overflow: hidden; }
+  .predict-fill { height: 100%; background: var(--accent); width: 0%; transition: width .2s ease; }
+  .verdict { margin-top: 14px; padding: 10px 14px; border-radius: 10px; background: var(--asphalt-3); font-weight: 500; }
+  .verdict.car { background: var(--sign-free); }
+  .btn { font: 600 15px var(--font-body); color: var(--ink); background: var(--accent); border: 0; border-radius: 10px; padding: 10px 18px; cursor: pointer; }
+  .btn.secondary { background: var(--asphalt-3); color: var(--ink); border: 1.5px solid var(--muted); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .config-row { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .config-row input { font: inherit; background: var(--asphalt-3); color: var(--ink); border: 1px solid var(--muted); border-radius: 6px; padding: 4px 8px; width: 100%; margin-top: 4px; }
+
+  /* ---- micro:bit / ESP32 ---- */
+  .bt-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .bt-status { font-size: 14px; color: var(--muted); }
+
+  /* ---- Log ---- */
+  .log-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 6px; font-family: var(--font-mono); font-size: 13px; }
+  .log-item { padding: 6px 10px; background: var(--asphalt-3); border-radius: 8px; display: flex; gap: 10px; }
+  .log-time { color: var(--muted); flex: none; }
+  .log-source { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; text-transform: uppercase; align-self: center; }
+  .log-source.esp32 { background: #1F3A2E; color: #7CD9A8; }
+  .log-source.microbit { background: #2A2A4A; color: #9BA8F0; }
+  .log-source.website { background: #3A2E1F; color: #E0B978; }
+  .log-empty { color: var(--muted); font-style: italic; padding: 6px 2px; }
+
+  .meta { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+  @media (max-width: 480px) {
+    .count { font-size: 68px; } .lot, .gates { gap: 12px; } .bay-letter { font-size: 56px; }
+    #webcam-container { width: 100%; height: auto; aspect-ratio: 1; }
+  }
+
+  /* ---- Tambahan interaksi (tidak mengubah tampilan) ---- */
+  .bay, .gate-card { cursor: pointer; }
+  .bay:focus-visible, .gate-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1>Smart Parking</h1>
+    <div class="pill warn" id="pill" role="status"><span class="dot"></span><span id="pillText">micro:bit belum tersambung</span></div>
+  </header>
+
+  <!-- ===== Papan ketersediaan ===== -->
+  <section class="sign" id="sign" data-mode="idle" aria-live="polite">
+    <div class="count" id="count">–</div>
+    <div>
+      <div class="sign-main" id="signMain">Memuat data</div>
+      <div class="sign-sub" id="signSub">Menunggu data</div>
+    </div>
+  </section>
+
+  <!-- ===== Gate ===== -->
+  <section class="panel">
+    <h2>Gate</h2>
+    <div class="gates">
+      <div class="gate-card" id="gate-gateIn" data-open="false" role="button" tabindex="0" aria-label="Gate IN, klik untuk buka atau tutup">
+        <div class="gate-name">Gate IN</div>
+        <div class="barrier"></div>
+        <div class="gate-status" data-text>Tertutup</div>
+        <div class="gate-source">micro:bit · Bluetooth</div>
+      </div>
+      <div class="gate-card" id="gate-gateOut" data-open="false" role="button" tabindex="0" aria-label="Gate OUT, klik untuk buka atau tutup">
+        <div class="gate-name">Gate OUT</div>
+        <div class="barrier"></div>
+        <div class="gate-status" data-text>Tertutup</div>
+        <div class="gate-source">ESP32 · WiFi</div>
+      </div>
+    </div>
+    <p class="meta">Klik kartu gate untuk membuka atau menutupnya.</p>
+  </section>
+
+  <!-- ===== Slot ===== -->
+  <section class="panel">
+    <h2>Slot parkir</h2>
+    <section class="lot" id="lot"></section>
+    <p class="meta">Klik slot untuk mengubah status kosong atau terisi.</p>
+  </section>
+
+  <!-- ===== Kamera + Teachable Machine ===== -->
+  <section class="panel">
+    <h2>Kamera deteksi mobil (Gate IN)</h2>
+    <div class="cam-wrap">
+      <div id="webcam-container"><span style="color:var(--muted);font-size:13px">Kamera belum aktif</span></div>
+      <div class="cam-info">
+        <div id="predictBars"></div>
+        <div class="verdict" id="verdict">Model belum dimuat</div>
+        <div class="btn-row">
+          <button class="btn" id="btnStartCam">Nyalakan kamera</button>
+          <button class="btn secondary" id="btnStopCam" disabled>Matikan kamera</button>
+        </div>
+        <div class="config-row">
+          URL model Teachable Machine (contoh: <code>https://teachablemachine.withgoogle.com/models/xxxxx/</code>)
+          <input type="text" id="modelUrl" placeholder="Tempel URL model di sini">
+          Nama class untuk "mobil" (sesuai nama class saat training)
+          <input type="text" id="carClassName" value="mobil">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Bluetooth micro:bit ===== -->
+  <section class="panel">
+    <h2>Koneksi micro:bit (Gate IN)</h2>
+    <div class="bt-row">
+      <button class="btn" id="btnConnectBt">Sambungkan micro:bit</button>
+      <button class="btn secondary" id="btnOpenManual" disabled>Buka gate manual</button>
+      <span class="bt-status" id="btStatus">Belum tersambung</span>
+    </div>
+    <p class="meta" style="margin-top:10px">
+      Perlu Chrome/Edge di laptop atau Android (Web Bluetooth tidak didukung di Safari/iPhone), dan halaman ini harus dibuka lewat HTTPS.
+    </p>
+  </section>
+
+  <!-- ===== Log aktivitas ===== -->
+  <section class="panel">
+    <h2>Log aktivitas</h2>
+    <div class="log-list" id="logList"><div class="log-empty">Belum ada aktivitas</div></div>
+  </section>
+</main>
+
+<script>
+/* ================================================================
+   DATA
+   Status awal slot hanya contoh. Klik slot untuk mengubahnya.
+   ================================================================ */
+const slots = [ { id: "A", taken: true }, { id: "B", taken: false } ];
+const GATES = [
+  { key: "gateIn",  label: "Gate IN",  source: "microbit" },
+  { key: "gateOut", label: "Gate OUT", source: "esp32" }
+];
+const gateState = { gateIn: false, gateOut: false };
+const logs = [];
+
+const CAR_SVG = `
+<svg viewBox="0 0 100 180" aria-hidden="true">
+  <rect x="-4" y="26" width="12" height="30" rx="4" fill="#111"/>
+  <rect x="92" y="26" width="12" height="30" rx="4" fill="#111"/>
+  <rect x="-4" y="122" width="12" height="30" rx="4" fill="#111"/>
+  <rect x="92" y="122" width="12" height="30" rx="4" fill="#111"/>
+  <rect x="4" y="4" width="92" height="172" rx="26" fill="var(--car)"/>
+  <rect x="16" y="44" width="68" height="34" rx="9" fill="#1B2A38"/>
+  <rect x="16" y="112" width="68" height="26" rx="8" fill="#1B2A38"/>
+  <rect x="20" y="80" width="60" height="30" rx="6" fill="#7A92AA"/>
+</svg>`;
+
+const lot = document.getElementById("lot");
+
+/* ================================================================
+   TAMPILAN (render)
+   ================================================================ */
+
+// Klik atau tekan Enter/Spasi
+function makeClickable(el, handler) {
+  el.addEventListener("click", handler);
+  el.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
+  });
+}
+
+// Membuat elemen kartu slot jika belum ada
+function ensureSlotEl(s) {
+  let el = document.getElementById("bay-" + s.id);
+  if (el) return el;
+  el = document.createElement("article");
+  el.className = "bay";
+  el.id = "bay-" + s.id;
+  el.dataset.state = "free";
+  el.setAttribute("role", "button");
+  el.tabIndex = 0;
+  el.setAttribute("aria-label", "Slot " + s.id + ", klik untuk mengubah status");
+  el.innerHTML = `
+    <div class="floor"><div class="bay-letter">${s.id}</div><div class="car">${CAR_SVG}</div></div>
+    <div class="bay-info"><h3>Slot ${s.id}</h3>
+      <div class="status"><span class="dot" id="dot-${s.id}"></span><span id="txt-${s.id}">Kosong</span></div>
+    </div>`;
+  makeClickable(el, () => toggleSlot(s.id));
+  lot.appendChild(el);
+  return el;
+}
+
+function render() {
+  slots.forEach(s => {
+    const el = ensureSlotEl(s);
+    el.dataset.state = s.taken ? "taken" : "free";
+    document.getElementById("txt-" + s.id).textContent = s.taken ? "Terisi" : "Kosong";
+    document.getElementById("dot-" + s.id).className = "dot " + (s.taken ? "off" : "live");
+  });
+
+  GATES.forEach(g => {
+    const el = document.getElementById("gate-" + g.key);
+    el.dataset.open = gateState[g.key] ? "true" : "false";
+    el.querySelector("[data-text]").textContent = gateState[g.key] ? "Terbuka" : "Tertutup";
+  });
+
+  // Papan ketersediaan, dihitung otomatis dari status slot
+  const freeCount = slots.filter(s => !s.taken).length;
+  const sign = document.getElementById("sign");
+  const countEl = document.getElementById("count");
+  const mainEl = document.getElementById("signMain");
+  const subEl = document.getElementById("signSub");
+  if (slots.length === 0) {
+    sign.dataset.mode = "idle"; countEl.textContent = "–";
+    mainEl.textContent = "Memuat data"; subEl.textContent = "Menunggu data";
+  } else if (freeCount === 0) {
+    sign.dataset.mode = "full"; countEl.textContent = "0";
+    mainEl.textContent = "Parkir penuh"; subEl.textContent = "Semua " + slots.length + " slot sedang terisi";
+  } else {
+    sign.dataset.mode = "free"; countEl.textContent = String(freeCount);
+    mainEl.textContent = "Tempat kosong"; subEl.textContent = "dari " + slots.length + " slot parkir";
+  }
+}
+
+function updatePill() {
+  const pill = document.getElementById("pill");
+  pill.className = "pill " + (mbConnected ? "live" : "warn");
+  document.getElementById("pillText").textContent = mbConnected ? "micro:bit tersambung" : "micro:bit belum tersambung";
+}
+
+/* ================================================================
+   LOG AKTIVITAS (terbaru tampil di atas)
+   ================================================================ */
+function addLog(source, event) {
+  logs.push({ time: Date.now(), source, event });
+  renderLogs();
+}
+
+function renderLogs() {
+  const list = document.getElementById("logList");
+  if (logs.length === 0) { list.innerHTML = '<div class="log-empty">Belum ada aktivitas</div>'; return; }
+  list.innerHTML = logs.slice(-40).map(l => {
+    const jam = new Date(l.time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    return `<div class="log-item"><span class="log-time">${jam}</span><span class="log-source ${l.source}">${l.source}</span><span>${l.event}</span></div>`;
+  }).join("");
+}
+
+/* ================================================================
+   SLOT (klik untuk mengganti status)
+   ================================================================ */
+function toggleSlot(id) {
+  const s = slots.find(x => x.id === id);
+  s.taken = !s.taken;
+  render();
+  addLog("website", "Slot " + id + (s.taken ? " terisi" : " kosong"));
+}
+
+/* ================================================================
+   GATE
+   ================================================================ */
+function setGate(key, open, source, text) {
+  gateState[key] = open;
+  render();
+  addLog(source, text || (GATES.find(g => g.key === key).label + (open ? " terbuka" : " tertutup")));
+}
+
+// Gate IN dikendalikan micro:bit: klik kartu mengirim perintah OPEN,
+// sedangkan statusnya (Terbuka/Tertutup) hanya berubah saat micro:bit melapor.
+// Gate OUT bisa dibuka/ditutup manual dari website.
+function toggleGate(key) {
+  if (key === "gateIn") { requestOpenGateIn("Gate IN dibuka dari website", true); return; }
+  setGate("gateOut", !gateState.gateOut, "website");
+}
+
+// Kirim perintah OPEN ke micro:bit lewat Bluetooth
+async function requestOpenGateIn(reason, manual) {
+  if (!btRxChar) {
+    if (manual) alert("Sambungkan micro:bit dulu.");
+    else addLog("website", reason + ", tetapi micro:bit belum tersambung");
+    return;
+  }
+  addLog("website", reason + ", kirim perintah OPEN ke micro:bit");
+  try { await sendToMicrobit("OPEN"); }
+  catch (err) { addLog("website", "Gagal kirim ke micro:bit: " + err.message); }
+}
+
+GATES.forEach(g => makeClickable(document.getElementById("gate-" + g.key), () => toggleGate(g.key)));
+
+/* ================================================================
+   KAMERA + TEACHABLE MACHINE (deteksi mobil untuk Gate IN)
+   ================================================================ */
+const TM_THRESHOLD = 0.85;      // keyakinan minimal agar dianggap "mobil"
+const TM_COOLDOWN_MS = 8000;    // jeda minimal antar-perintah buka gate
+let tmModel = null, tmWebcam = null, tmRunning = false, lastOpenAt = 0;
+
+// Ingat URL model terakhir agar tidak perlu mengetik ulang
+try {
+  const saved = localStorage.getItem("tmModelUrl");
+  if (saved) document.getElementById("modelUrl").value = saved;
+} catch (e) {}
+
+async function startCamera() {
+  const modelUrl = document.getElementById("modelUrl").value.trim();
+  if (!modelUrl) { alert("Isi dulu URL model Teachable Machine."); return; }
+  if (typeof tmImage === "undefined") {
+    document.getElementById("verdict").textContent = "Library Teachable Machine gagal dimuat. Cek koneksi internet.";
+    return;
+  }
+
+  document.getElementById("verdict").textContent = "Memuat model...";
+  try {
+    const base = modelUrl.endsWith("/") ? modelUrl : modelUrl + "/";
+    tmModel = await tmImage.load(base + "model.json", base + "metadata.json");
+
+    const container = document.getElementById("webcam-container");
+    container.innerHTML = "";
+    tmWebcam = new tmImage.Webcam(240, 240, true);
+    await tmWebcam.setup();
+    await tmWebcam.play();
+    container.appendChild(tmWebcam.canvas);
+
+    try { localStorage.setItem("tmModelUrl", modelUrl); } catch (e) {}
+    tmRunning = true;
+    document.getElementById("btnStartCam").disabled = true;
+    document.getElementById("btnStopCam").disabled = false;
+    document.getElementById("verdict").textContent = "Kamera aktif, mendeteksi...";
+    addLog("website", "Kamera & model Teachable Machine aktif");
+    requestAnimationFrame(tmLoop);
+  } catch (err) {
+    document.getElementById("verdict").textContent = "Gagal memuat model: " + err.message;
+  }
+}
+
+function stopCamera() {
+  tmRunning = false;
+  if (tmWebcam) tmWebcam.stop();
+  document.getElementById("webcam-container").innerHTML = '<span style="color:var(--muted);font-size:13px">Kamera belum aktif</span>';
+  document.getElementById("predictBars").innerHTML = "";
+  document.getElementById("btnStartCam").disabled = false;
+  document.getElementById("btnStopCam").disabled = true;
+  const verdictEl = document.getElementById("verdict");
+  verdictEl.textContent = "Kamera dimatikan";
+  verdictEl.classList.remove("car");
+  addLog("website", "Kamera dimatikan");
+}
+
+async function tmLoop() {
+  if (!tmRunning) return;
+  tmWebcam.update();
+  const predictions = await tmModel.predict(tmWebcam.canvas);
+
+  document.getElementById("predictBars").innerHTML = predictions.map(p => `
+    <div class="predict-bar-row">
+      <div class="predict-label">${p.className}</div>
+      <div class="predict-track"><div class="predict-fill" style="width:${(p.probability * 100).toFixed(0)}%"></div></div>
+      <div>${(p.probability * 100).toFixed(0)}%</div>
+    </div>`).join("");
+
+  const carClass = document.getElementById("carClassName").value.trim() || "mobil";
+  const best = predictions.reduce((a, b) => (a.probability > b.probability ? a : b));
+  const verdictEl = document.getElementById("verdict");
+
+  if (best.className === carClass && best.probability >= TM_THRESHOLD) {
+    verdictEl.textContent = "Mobil terdeteksi (" + (best.probability * 100).toFixed(0) + "%)";
+    verdictEl.classList.add("car");
+    const now = Date.now();
+    if (now - lastOpenAt > TM_COOLDOWN_MS) {
+      lastOpenAt = now;
+      requestOpenGateIn("Mobil terdeteksi", false);
+    }
+  } else {
+    verdictEl.textContent = "Tidak ada mobil terdeteksi";
+    verdictEl.classList.remove("car");
+  }
+
+  requestAnimationFrame(tmLoop);
+}
+
+/* ================================================================
+   WEB BLUETOOTH -> micro:bit (UART service)
+   Website kirim "OPEN" ke micro:bit. micro:bit membalas
+   "OPENED" / "CLOSED" / "READY", dan balasan itu yang mengubah
+   keterangan Gate IN di halaman.
+   ================================================================ */
+const UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_RX      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // website -> micro:bit
+const UART_TX      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // micro:bit -> website
+
+let mbConnected = false;
+let btDevice = null, btRxChar = null, btTxChar = null;
+
+async function connectMicrobit() {
+  if (!navigator.bluetooth) {
+    alert("Browser ini tidak mendukung Web Bluetooth. Pakai Chrome/Edge di laptop atau Android.");
+    return;
+  }
+  try {
+    btDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "BBC micro:bit" }, { services: [UART_SERVICE] }],
+      optionalServices: [UART_SERVICE]
+    });
+    const server = await btDevice.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    btRxChar = await service.getCharacteristic(UART_RX);
+    btTxChar = await service.getCharacteristic(UART_TX);
+
+    await btTxChar.startNotifications();
+    btTxChar.addEventListener("characteristicvaluechanged", onMicrobitData);
+    btDevice.addEventListener("gattserverdisconnected", onMicrobitDisconnected);
+
+    mbConnected = true;
+    document.getElementById("btStatus").textContent = "Tersambung ke " + (btDevice.name || "micro:bit");
+    document.getElementById("btnConnectBt").textContent = "Putuskan micro:bit";
+    document.getElementById("btnOpenManual").disabled = false;
+    updatePill();
+    addLog("microbit", "Bluetooth tersambung");
+  } catch (err) {
+    document.getElementById("btStatus").textContent = "Gagal menyambung: " + err.message;
+  }
+}
+
+function onMicrobitDisconnected() {
+  mbConnected = false;
+  btRxChar = null; btTxChar = null;
+  document.getElementById("btStatus").textContent = "Terputus";
+  document.getElementById("btnConnectBt").textContent = "Sambungkan micro:bit";
+  document.getElementById("btnOpenManual").disabled = true;
+  updatePill();
+  addLog("microbit", "Bluetooth terputus");
+}
+
+// Pesan dari micro:bit: ini sumber keterangan Gate IN
+function onMicrobitData(event) {
+  const text = new TextDecoder().decode(event.target.value).trim();
+  if (!text) return;
+
+  if (text.includes("OPENED")) setGate("gateIn", true, "microbit", "Gate IN terbuka");
+  else if (text.includes("CLOSED")) setGate("gateIn", false, "microbit", "Gate IN tertutup");
+  else if (text.includes("READY")) addLog("microbit", "micro:bit siap");
+}
+
+async function sendToMicrobit(text) {
+  if (!btRxChar) throw new Error("micro:bit belum tersambung");
+  await btRxChar.writeValue(new TextEncoder().encode(text + "\n"));
+}
+
+function toggleMicrobit() {
+  if (mbConnected && btDevice && btDevice.gatt.connected) btDevice.gatt.disconnect();
+  else connectMicrobit();
+}
+
+/* ================================================================
+   MULAI
+   ================================================================ */
+document.getElementById("btnStartCam").addEventListener("click", startCamera);
+document.getElementById("btnStopCam").addEventListener("click", stopCamera);
+document.getElementById("btnConnectBt").addEventListener("click", toggleMicrobit);
+document.getElementById("btnOpenManual").addEventListener("click", () => {
+  requestOpenGateIn("Gate IN dibuka manual lewat website", true);
+});
+
+render();
+updatePill();
+addLog("website", "Website siap");
+</script>
+</body>
+</html>
