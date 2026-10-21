@@ -178,7 +178,7 @@
         <div class="config-row">
           URL model Teachable Machine (contoh: <code>https://teachablemachine.withgoogle.com/models/xxxxx/</code>)
           <input type="text" id="modelUrl" placeholder="Tempel URL model di sini">
-          Nama class untuk "mobil" (sesuai nama class saat training)
+          Nama class untuk "OPEN" (sesuai nama class saat training)
           <input type="text" id="carClassName" value="mobil">
         </div>
       </div>
@@ -214,7 +214,7 @@
    Selama masih berisi "NAMA-PROJECT", website berjalan di mode demo
    (data lokal, tidak terkirim ke Firebase).
    ================================================================ */
-const FIREBASE_URL = "https://NAMA-PROJECT-default-rtdb.asia-southeast1.firebasedatabase.app";
+const FIREBASE_URL = "https://parkir-pintar-8b8ed-default-rtdb.asia-southeast1.firebasedatabase.app/";
 const ESP_TIMEOUT_MS = 75000;       // ESP32 dianggap mati jika tidak ada pembaruan selama ini
 const TM_THRESHOLD = 0.85;          // keyakinan minimal sebelum dianggap "mobil"
 const TM_COOLDOWN_MS = 8000;        // jeda minimal antar-pengiriman perintah OPEN
